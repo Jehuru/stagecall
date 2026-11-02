@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#10251f">
+  <title>StageCall — Offline stop requests</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, Segoe UI, sans-serif; background:#10251f; color:#f4f7f2; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; display:flex; justify-content:center; }
+    main { width:min(100%,760px); padding:clamp(20px,5vw,48px); }
+    header { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:28px; }
+    .brand { font-size:18px; font-weight:800; letter-spacing:.04em; }
+    .status { color:#aabbb2; font-size:13px; }
+    h1 { font-size:clamp(32px,8vw,56px); line-height:1.02; margin:0 0 10px; }
+    p { color:#b8c8bf; margin:0 0 24px; font-size:17px; }
+    .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+    button { font:inherit; border:0; cursor:pointer; }
+    .stage { min-height:112px; border-radius:18px; color:#10251f; background:#d8f36a; font-size:clamp(22px,5vw,32px); font-weight:800; }
+    .stage:active, .action:active { transform:scale(.98); }
+    .note { min-height:32px; margin-top:18px; color:#d8f36a; font-weight:650; }
+    .queue { display:grid; gap:12px; margin-top:28px; }
+    .row { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:20px 22px; background:#1d3830; border:1px solid #355147; border-radius:16px; }
+    .row strong { font-size:clamp(24px,6vw,38px); }
+    .row:first-child { background:#d8f36a; color:#10251f; border-color:#d8f36a; }
+    .row:first-child small { color:#31451d; }
+    small { display:block; color:#b8c8bf; margin-top:4px; font-size:13px; }
+    .action { border-radius:12px; padding:14px 18px; background:#10251f; color:#fff; font-weight:700; }
+    .fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; max-width:600px; }
+    label { display:grid; gap:7px; color:#b8c8bf; font-size:14px; }
+    input, select { width:100%; padding:14px; border-radius:10px; border:1px solid #547066; color:#fff; background:#1d3830; font:inherit; }
+    .admin-card { padding:20px; margin:14px 0; background:#1d3830; border-radius:16px; }
+    .admin-card strong { color:#d8f36a; }
+    .empty { padding:28px; border:1px dashed #547066; border-radius:16px; color:#b8c8bf; text-align:center; }
+    footer { color:#80968b; font-size:12px; margin-top:32px; }
+    @media(max-width:420px) { .grid { gap:10px; } .stage { min-height:96px; } }
+  </style>
+</head>
+<body>
+<main>
+  <header><div class="brand">STAGECALL</div><div class="status" id="status">Connecting locally…</div></header>
+  <section id="passenger" hidden>
+    <h1>Where are you getting off?</h1>
+    <p>Tap your stage once. Your request will appear on the driver’s screen.</p>
+    <div class="grid" id="stages"></div>
+    <div class="note" id="note" aria-live="polite"></div>
+  </section>
+  <section id="driver" hidden>
+    <h1>Requested stops</h1>
+    <p>Stops appear in route order. Clear a stop when served.</p>
+    <div class="queue" id="queue"></div>
+  </section>
+  <section id="admin" hidden>
+    <h1>Vehicle admin</h1>
+    <p>Local status and maintenance record for this vehicle.</p>
+    <div class="admin-card" id="health">Loading vehicle status…</div>
+    <form id="admin-form">
+      <div class="fields">
+        <label>Local admin key<input name="admin_key" type="password" required autocomplete="current-password" placeholder="Shown in the server window"></label>
+        <label>Vehicle ID<input name="vehicle_id" required maxlength="32" placeholder="e.g. MAT-014"></label>
+        <label>SACCO<input name="sacco" required maxlength="64" placeholder="SACCO name"></label>
+        <label>Monthly maintenance fee<input value="$10 USD / month" disabled></label>
+        <label>Billing status<select name="billing_status"><option>Due</option><option>Paid</option></select></label>
+      </div>
+      <p class="note" id="admin-note" aria-live="polite"></p>
+      <button class="stage" style="min-height:58px;padding:12px 24px;font-size:18px">Save vehicle record</button>
+    </form>
+    <div class="fields" style="margin-top:18px">
+      <label>Central fleet service URL<input name="fleet_url" type="url" placeholder="https://fleet.example.com"></label>
+      <label>Vehicle sync token<input name="fleet_token" type="password" placeholder="Paste new token; blank keeps saved token"></label>
+    </div>
+    <small>Fleet updates send once a minute when this device has internet. Stop requests remain local. The local admin key is printed in the server window.</small>
+  </section>
+  <footer>Local vehicle network · No internet required</footer>
+</main>
+<script>
+  const requestedMode = new URLSearchParams(location.search).get('screen');
+  const mode = ['driver','admin'].includes(requestedMode) ? requestedMode : 'passenger';
+  document.getElementById(mode).hidden = false;
+  const statusEl = document.getElementById('status');
+  let lastRequest = null, undoTimer = null, lastRendered = '';
+  async function api(path, data, authKey=null) {
+    const headers = {'Content-Type':'application/json'};
+    if (authKey) headers.Authorization = `Bearer ${authKey}`;
+    const r = await fetch(path, {method:'POST', headers, body:JSON.stringify(data)});
+    const result = await r.json();
+    if (!r.ok) throw new Error(result.error || 'Request failed');
+    return result;
+  }
+  function announce(text) { document.getElementById('note').textContent = text; }
+  async function refresh() {
+    try {
+      const r = await fetch(`/api/state?screen=${mode}`, {cache:'no-store'});
+      const state = await r.json();
+      statusEl.textContent = 'Connected · local network';
+      if (mode === 'passenger') {
+        const html = state.stages.map(stage => `<button class="stage" data-stage="${stage}">${stage}</button>`).join('');
+        if (html !== lastRendered) {
+          document.getElementById('stages').innerHTML = html; lastRendered = html;
+          document.querySelectorAll('.stage').forEach(b => b.onclick = () => selectStage(b.dataset.stage));
+        }
+      } else if (mode === 'driver') {
+        const q = document.getElementById('queue');
+        q.innerHTML = state.queue.length ? state.queue.map((stage, i) => `<div class="row"><div><small>${i === 0 ? 'NEXT STOP' : 'UPCOMING'}</small><strong>${stage}</strong></div><div><button class="action" data-action="served" data-stage="${stage}">Served</button>${state.single.includes(stage) ? `<button class="action" style="margin-left:6px" data-action="skip" data-stage="${stage}">No longer needed</button>` : ''}</div></div>`).join('') : '<div class="empty">No stops requested yet</div>';
+        q.querySelectorAll('.action').forEach(b => b.onclick = async () => { await api(b.dataset.action === 'skip' ? '/api/skip' : '/api/serve', {stage:b.dataset.stage}); refresh(); });
+      } else {
+        const formatSeen = value => value && (Date.now()/1000 - value < 20) ? 'Online' : 'Not recently seen';
+        const fleetSync = state.fleet_sync.last_success ? `Last fleet sync: ${new Date(state.fleet_sync.last_success*1000).toLocaleString()}` : (state.fleet_sync.error ? `Fleet sync issue: ${state.fleet_sync.error}` : (state.config.fleet_sync_configured ? 'Fleet sync configured; waiting for check-in' : 'Fleet sync: not configured'));
+        document.getElementById('health').innerHTML = `<strong>${state.config.vehicle_id}</strong> · ${state.config.sacco}<br>Passenger screen: ${formatSeen(state.screens.passenger)}<br>Driver screen: ${formatSeen(state.screens.driver)}<br>Requested stops waiting: ${state.queue.length}<br>Server uptime: ${Math.floor(state.uptime/60)} min<br>Maintenance: $${state.config.monthly_fee} ${state.config.currency}/month · ${state.config.billing_status}<br>${fleetSync}`;
+        const form = document.getElementById('admin-form');
+        if (!form.dataset.loaded) {
+          form.elements.vehicle_id.value = state.config.vehicle_id;
+          form.elements.sacco.value = state.config.sacco;
+          form.elements.billing_status.value = state.config.billing_status;
+          form.elements.fleet_url.value = state.config.fleet_url || '';
+          form.dataset.loaded = 'true';
+        }
+      }
+    } catch (_) { statusEl.textContent = 'Not connected · check local Wi‑Fi'; }
+  }
+  if (mode === 'admin') document.getElementById('admin-form').onsubmit = async event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    try { await api('/api/admin/config', {vehicle_id:form.elements.vehicle_id.value, sacco:form.elements.sacco.value, billing_status:form.elements.billing_status.value, fleet_url:form.elements.fleet_url.value, fleet_token:form.elements.fleet_token.value}, form.elements.admin_key.value); form.elements.fleet_token.value=''; document.getElementById('admin-note').textContent='Vehicle record saved.'; refresh(); }
+    catch(e) { document.getElementById('admin-note').textContent=e.message; }
+  };
+  async function selectStage(stage) {
+    try {
+      const result = await api('/api/select', {stage}); lastRequest = result.id;
+      announce(`${stage} added. `);
+      const undo = document.createElement('button'); undo.className='action'; undo.textContent='Undo'; undo.style.marginLeft='8px';
+      undo.onclick = async () => { try { await api('/api/undo', {id:lastRequest}); announce('Request cancelled.'); } catch(e) { announce('Another selection was made; ask the conductor to correct it.'); } clearTimeout(undoTimer); undo.remove(); };
+      document.getElementById('note').appendChild(undo);
+      clearTimeout(undoTimer); undoTimer = setTimeout(() => { if (undo.isConnected) { undo.remove(); announce(`${stage} request sent.`); } }, 10000);
+    } catch(e) { announce(e.message); }
+  }
+  refresh(); setInterval(refresh, 1000);
+</script>
+</body>
+</html>
+
