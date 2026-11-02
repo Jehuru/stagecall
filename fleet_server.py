@@ -11,10 +11,15 @@ import time
 from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parent
-DATA_FILE = ROOT / "fleet_data.json"
+DATA_DIR = Path(os.environ.get("DATA_DIR", str(ROOT))).expanduser()
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+DATA_FILE = DATA_DIR / "fleet_data.json"
 LOCK = threading.Lock()
-ADMIN_KEY = os.environ.get("STAGECALL_ADMIN_KEY") or secrets.token_urlsafe(24)
-if not os.environ.get("STAGECALL_ADMIN_KEY"):
+ADMIN_KEY = os.environ.get("STAGECALL_ADMIN_KEY")
+if not ADMIN_KEY and os.environ.get("PORT"):
+    raise RuntimeError("STAGECALL_ADMIN_KEY must be configured for hosted deployments")
+if not ADMIN_KEY:
+    ADMIN_KEY = secrets.token_urlsafe(24)
     print("Temporary admin key (set STAGECALL_ADMIN_KEY to keep a stable key):")
     print(ADMIN_KEY)
 try:
@@ -24,7 +29,9 @@ except (OSError, ValueError):
 
 
 def save_records():
-    DATA_FILE.write_text(json.dumps(records, indent=2), encoding="utf-8")
+    temporary_file = DATA_FILE.with_suffix(".tmp")
+    temporary_file.write_text(json.dumps(records, indent=2), encoding="utf-8")
+    os.replace(temporary_file, DATA_FILE)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -34,6 +41,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
         self.end_headers()
         self.wfile.write(data)
 
@@ -57,7 +67,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
-        if path == "/":
+        if path == "/healthz":
+            self.send_body(200, json.dumps({"ok": True}))
+        elif path == "/":
             self.send_body(200, (ROOT / "fleet.html").read_bytes(), "text/html; charset=utf-8")
         elif path == "/api/vehicles":
             if not self.is_admin():
@@ -121,7 +133,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("STAGECALL_PORT", "8090"))
+    port = int(os.environ.get("PORT", os.environ.get("STAGECALL_PORT", "8090")))
     print(f"StageCall fleet dashboard listening on port {port}.")
     print("For internet use, publish behind HTTPS and keep the admin key and vehicle tokens private.")
     ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()
