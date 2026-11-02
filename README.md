@@ -36,3 +36,7 @@ To keep the central admin key stable when restarting the service in PowerShell, 
 
 For real remote monitoring across mobile networks, the central service must be hosted at a stable public address with HTTPS. The included Python service is a prototype and does not provide HTTPS, user accounts, automated invoices, or payment processing. Do not expose it directly to the public internet; use a properly secured HTTPS host before deploying to paying SACCOs. The admin key and vehicle tokens grant access and should be kept private.
 
+## Hosted pilot
+
+`render.yaml` and `DEPLOYMENT.md` prepare the central fleet service for a Render hosted pilot with HTTPS, a generated admin key, a health check, and persistent storage. The estimated starting cost is about $7.25/month before extra bandwidth. Review the deployment guide and the host's final price before creating any paid service.
+
