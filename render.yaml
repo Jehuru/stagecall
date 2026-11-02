@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: stagecall-fleet
+    runtime: python
+    plan: starter
+    region: frankfurt
+    buildCommand: pip install -r requirements.txt
+    startCommand: python fleet_server.py
+    healthCheckPath: /healthz
+    disk:
+      name: stagecall-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: DATA_DIR
+        value: /var/data
+      - key: STAGECALL_ADMIN_KEY
+        generateValue: true
+
